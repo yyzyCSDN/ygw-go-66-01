@@ -52,7 +52,7 @@ func (s *Searcher) Page(q index.Query, page, size int) (PageResult, error) {
 	}
 	end := offset + size
 	if end > len(hits) {
-		end = len(hits) - 1
+		end = len(hits)
 	}
 	selected := hits[offset:end]
 	records := make([]model.Record, 0, len(selected))
