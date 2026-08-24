@@ -151,16 +151,14 @@ func (a *Appender) Append(rec model.Record) (model.Record, error) {
 	return rec, nil
 }
 
-// appendToBlock 将记录合并进目标块。
+// appendToBlock 将记录追加到目标块的尾部。
 func (a *Appender) appendToBlock(block *model.Block, rec model.Record) error {
 	if block == nil {
 		return errors.New("append target block is nil")
 	}
-	if len(block.Records) > 0 {
-		block.Records = append(block.Records[:len(block.Records)-1], rec)
-	} else {
-		block.Records = append(block.Records, rec)
-	}
+	// 追加偏移必须指向块尾（len(Records)），落在已有最后一条记录之后；
+	// 若落在 len-1 处会把已有记录覆盖，导致审计记录丢失。
+	block.Records = append(block.Records, rec)
 	return nil
 }
 
