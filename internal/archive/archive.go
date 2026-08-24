@@ -39,7 +39,8 @@ func NewArchiver(st *store.FileStore, logger *log.Logger) (*Archiver, error) {
 	return archiver, nil
 }
 
-// Window 从活跃块中选择一个归档窗口：从最旧块开始的 size 个连续活跃块。
+// Window 从活跃块中选择一个归档窗口：从最旧活跃块开始的 size 个连续活跃块。
+// 选中后同步记录窗口边界，供保留策略跳过尚未落定归档的边界块，避免误清理。
 func (ar *Archiver) Window(blocks []*model.Block, size int) ([]*model.Block, error) {
 	if size <= 0 {
 		return nil, errors.New("archive window size must be positive")
@@ -50,14 +51,26 @@ func (ar *Archiver) Window(blocks []*model.Block, size int) ([]*model.Block, err
 	sorted := make([]*model.Block, len(blocks))
 	copy(sorted, blocks)
 	sort.Slice(sorted, func(i, j int) bool { return sorted[i].ID < sorted[j].ID })
-	start := sorted[0].ID
-	end := start + uint64(size) - 1
+	// 窗口从最旧的活跃块起算，跳过已归档块，保证连续调用能逐批推进。
 	selected := make([]*model.Block, 0, size)
 	for _, block := range sorted {
-		if block.ID >= start && block.ID < end && block.State == model.StateActive {
+		if len(selected) >= size {
+			break
+		}
+		if block.State == model.StateActive {
 			selected = append(selected, block)
 		}
 	}
+	// 边界采用半开区间 [start, end)，与 InActiveWindow 的判定一致。
+	var start, end uint64
+	if len(selected) > 0 {
+		start = selected[0].ID
+		end = selected[len(selected)-1].ID + 1
+	}
+	ar.mu.Lock()
+	ar.windowStart = start
+	ar.windowEnd = end
+	ar.mu.Unlock()
 	return selected, nil
 }
 
