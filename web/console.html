@@ -1,0 +1,250 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>AuditLog 控制台</title>
+<style>
+  body { font-family: "Segoe UI", "Microsoft YaHei", sans-serif; margin: 0; background: #f5f6f8; color: #222; }
+  header { background: #1f2937; color: #fff; padding: 14px 24px; display: flex; align-items: center; gap: 16px; }
+  header h1 { font-size: 18px; margin: 0; }
+  header .sub { color: #9ca3af; font-size: 12px; }
+  main { max-width: 1080px; margin: 24px auto; padding: 0 16px; }
+  nav { display: flex; gap: 8px; margin-bottom: 18px; flex-wrap: wrap; }
+  nav button { border: 1px solid #d1d5db; background: #fff; padding: 8px 14px; border-radius: 6px; cursor: pointer; }
+  nav button.active { background: #2563eb; border-color: #2563eb; color: #fff; }
+  .panel { display: none; background: #fff; border: 1px solid #e5e7eb; border-radius: 8px; padding: 18px; }
+  .panel.active { display: block; }
+  label { display: block; margin: 10px 0 4px; font-size: 13px; color: #374151; }
+  input, textarea, select { width: 100%; box-sizing: border-box; padding: 8px; border: 1px solid #d1d5db; border-radius: 6px; font-size: 14px; }
+  textarea { min-height: 64px; }
+  .row { display: flex; gap: 12px; }
+  .row > div { flex: 1; }
+  button.run { margin-top: 14px; background: #2563eb; color: #fff; border: 0; padding: 9px 20px; border-radius: 6px; cursor: pointer; }
+  pre { background: #0f172a; color: #dbeafe; padding: 12px; border-radius: 6px; overflow: auto; max-height: 420px; font-size: 12px; }
+  .status { margin-top: 10px; font-size: 13px; color: #047857; }
+  .status.error { color: #b91c1c; }
+  table { border-collapse: collapse; width: 100%; font-size: 13px; }
+  th, td { border: 1px solid #e5e7eb; padding: 6px 8px; text-align: left; }
+  th { background: #f3f4f6; }
+</style>
+</head>
+<body>
+<header>
+  <h1>AuditLog 控制台</h1>
+  <span class="sub">不可变审计日志留存服务</span>
+</header>
+<main>
+  <nav>
+    <button data-panel="append" class="active">追加</button>
+    <button data-panel="search">检索</button>
+    <button data-panel="verify">校验</button>
+    <button data-panel="archive">归档</button>
+    <button data-panel="retention">保留</button>
+    <button data-panel="export">导出</button>
+    <button data-panel="stats">状态</button>
+  </nav>
+
+  <section id="append" class="panel active">
+    <div class="row">
+      <div><label>操作主体</label><input id="ap-actor" value="ops"></div>
+      <div><label>动作类型</label><input id="ap-action" value="config.change"></div>
+    </div>
+    <label>详情</label>
+    <textarea id="ap-detail">修改了服务端口的监听配置</textarea>
+    <button class="run" onclick="appendRecord()">追加记录</button>
+    <div id="ap-status" class="status"></div>
+    <pre id="ap-out"></pre>
+  </section>
+
+  <section id="search" class="panel">
+    <div class="row">
+      <div><label>主体</label><input id="sr-actor"></div>
+      <div><label>动作</label><input id="sr-action"></div>
+      <div><label>关键词</label><input id="sr-keyword"></div>
+    </div>
+    <div class="row">
+      <div><label>页码</label><input id="sr-page" value="1"></div>
+      <div><label>每页</label><input id="sr-size" value="10"></div>
+    </div>
+    <button class="run" onclick="searchRecords()">检索</button>
+    <div id="sr-status" class="status"></div>
+    <pre id="sr-out"></pre>
+  </section>
+
+  <section id="verify" class="panel">
+    <button class="run" onclick="verifyChain()">执行完整性校验</button>
+    <div id="vf-status" class="status"></div>
+    <pre id="vf-out"></pre>
+  </section>
+
+  <section id="archive" class="panel">
+    <label>归档窗口大小（块）</label>
+    <input id="ar-size" value="3">
+    <button class="run" onclick="archiveWindow()">执行归档</button>
+    <div id="ar-status" class="status"></div>
+    <pre id="ar-out"></pre>
+  </section>
+
+  <section id="retention" class="panel">
+    <label>保留策略</label>
+    <input id="rt-policy" value="30d">
+    <button class="run" onclick="applyRetention()">执行清理</button>
+    <div id="rt-status" class="status"></div>
+    <pre id="rt-out"></pre>
+  </section>
+
+  <section id="export" class="panel">
+    <button class="run" onclick="startExport()">启动导出</button>
+    <label>导出任务 ID</label>
+    <input id="ex-id" placeholder="exp-...">
+    <button class="run" onclick="resumeExport()">续传导出</button>
+    <div id="ex-status" class="status"></div>
+    <pre id="ex-out"></pre>
+  </section>
+
+  <section id="stats" class="panel">
+    <button class="run" onclick="loadStats()">刷新状态</button>
+    <div id="st-status" class="status"></div>
+    <pre id="st-out"></pre>
+  </section>
+</main>
+
+<script>
+  const tabs = document.querySelectorAll("nav button");
+  tabs.forEach(button => button.addEventListener("click", () => {
+    tabs.forEach(b => b.classList.remove("active"));
+    button.classList.add("active");
+    document.querySelectorAll(".panel").forEach(p => p.classList.remove("active"));
+    document.getElementById(button.dataset.panel).classList.add("active");
+  }));
+
+  async function request(url, options) {
+    const response = await fetch(url, options);
+    const text = await response.text();
+    let data = text;
+    try { data = JSON.parse(text); } catch (e) { /* keep raw text */ }
+    if (!response.ok) {
+      throw new Error(typeof data === "object" && data.error ? data.error : text);
+    }
+    return data;
+  }
+
+  function show(id, message, error) {
+    const box = document.getElementById(id);
+    box.textContent = message;
+    box.className = "status" + (error ? " error" : "");
+  }
+
+  function dump(id, data) {
+    document.getElementById(id).textContent = JSON.stringify(data, null, 2);
+  }
+
+  async function appendRecord() {
+    try {
+      const body = {
+        actor: document.getElementById("ap-actor").value,
+        action: document.getElementById("ap-action").value,
+        detail: document.getElementById("ap-detail").value
+      };
+      const data = await request("/api/v1/records", {
+        method: "POST",
+        headers: {"Content-Type": "application/json"},
+        body: JSON.stringify(body)
+      });
+      show("ap-status", "已写入 seq=" + data.seq);
+      dump("ap-out", data);
+    } catch (e) {
+      show("ap-status", e.message, true);
+    }
+  }
+
+  async function searchRecords() {
+    try {
+      const params = new URLSearchParams({
+        actor: document.getElementById("sr-actor").value,
+        action: document.getElementById("sr-action").value,
+        keyword: document.getElementById("sr-keyword").value,
+        page: document.getElementById("sr-page").value,
+        size: document.getElementById("sr-size").value
+      });
+      const data = await request("/api/v1/records?" + params.toString());
+      show("sr-status", "命中 " + data.total + " 条，返回 " + data.records.length + " 条");
+      dump("sr-out", data);
+    } catch (e) {
+      show("sr-status", e.message, true);
+    }
+  }
+
+  async function verifyChain() {
+    try {
+      const data = await request("/api/v1/verify", {method: "POST"});
+      show("vf-status", data.passed ? "校验通过" : "发现 " + data.broken.length + " 处断链");
+      dump("vf-out", data);
+    } catch (e) {
+      show("vf-status", e.message, true);
+    }
+  }
+
+  async function archiveWindow() {
+    try {
+      const data = await request("/api/v1/archive", {
+        method: "POST",
+        headers: {"Content-Type": "application/json"},
+        body: JSON.stringify({size: Number(document.getElementById("ar-size").value)})
+      });
+      show("ar-status", "归档 " + data.count + " 个块");
+      dump("ar-out", data);
+    } catch (e) {
+      show("ar-status", e.message, true);
+    }
+  }
+
+  async function applyRetention() {
+    try {
+      const data = await request("/api/v1/retention", {
+        method: "POST",
+        headers: {"Content-Type": "application/json"},
+        body: JSON.stringify({policy: document.getElementById("rt-policy").value})
+      });
+      show("rt-status", "扫描 " + data.scanned + " 块，删除 " + data.deleted + " 块");
+      dump("rt-out", data);
+    } catch (e) {
+      show("rt-status", e.message, true);
+    }
+  }
+
+  async function startExport() {
+    try {
+      const data = await request("/api/v1/export", {method: "POST"});
+      document.getElementById("ex-id").value = data.exporter_id;
+      show("ex-status", "导出任务已创建: " + data.exporter_id);
+      dump("ex-out", data);
+    } catch (e) {
+      show("ex-status", e.message, true);
+    }
+  }
+
+  async function resumeExport() {
+    try {
+      const id = document.getElementById("ex-id").value;
+      if (!id) { show("ex-status", "请输入导出任务 ID", true); return; }
+      const data = await request("/api/v1/export/" + id + "?limit=100");
+      show("ex-status", "返回 " + data.records.length + " 条记录");
+      dump("ex-out", data);
+    } catch (e) {
+      show("ex-status", e.message, true);
+    }
+  }
+
+  async function loadStats() {
+    try {
+      const data = await request("/api/v1/stats");
+      show("st-status", "运行正常");
+      dump("st-out", data);
+    } catch (e) {
+      show("st-status", e.message, true);
+    }
+  }
+</script>
+</body>
+</html>
