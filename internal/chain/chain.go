@@ -41,8 +41,11 @@ func (c *Chain) Link(prev, cur *model.Block) error {
 	if cur == nil {
 		return errors.New("link target block is nil")
 	}
-	prevHash := BlockHash(cur)
-	cur.PrevHash = prevHash
+	if prev != nil {
+		cur.PrevHash = BlockHash(prev)
+	} else {
+		cur.PrevHash = 0
+	}
 	cur.Hash = BlockHash(cur)
 	c.Register(cur.ID)
 	return nil
