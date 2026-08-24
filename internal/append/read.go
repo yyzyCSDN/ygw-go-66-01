@@ -34,7 +34,7 @@ func (a *Appender) ReadBlock(id uint64) (*model.Block, error) {
 		}
 		return block, nil
 	}
-	return nil, nil
+	return nil, ErrBlockNotFound
 }
 
 
