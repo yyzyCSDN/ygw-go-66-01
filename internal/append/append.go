@@ -137,12 +137,21 @@ func (a *Appender) Append(rec model.Record) (model.Record, error) {
 		a.metrics.AppendErrors++
 		return model.Record{}, err
 	}
+	prevHash := a.head.Hash
 	if err := a.chain.RefreshHash(a.head); err != nil {
 		a.metrics.AppendErrors++
 		return model.Record{}, err
 	}
 	if err := a.persistHead(); err != nil {
+		// 持久化失败必须真实上报：吞错后仍返回成功会让接口对外宣称写入完成，
+		// 而日志实际未落盘，造成审计记录静默缺失。回滚内存中已追加但未落盘的
+		// 记录、哈希与序号，使调用方重试时可使用同一序号重新写入，不留空洞。
 		a.logger.Printf("append persist failed: %v", err)
+		a.head.Records = a.head.Records[:len(a.head.Records)-1]
+		a.head.Hash = prevHash
+		a.seq = rec.Seq
+		a.metrics.AppendErrors++
+		return model.Record{}, fmt.Errorf("persist head block %d: %w", a.head.ID, err)
 	}
 	a.metrics.AppendTotal++
 	a.metrics.RecordsTotal++
